@@ -1,0 +1,30 @@
+{
+  "name": "konnector-ai",
+  "version": "1.0.0",
+  "description": "Konnector AI - Your Digital Workforce on WhatsApp (Enterprise Multi-Tenant SaaS)",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --prefix apps/backend run start:dev",
+    "dev:frontend": "npm --prefix apps/frontend run dev",
+    "build:backend": "npm --prefix apps/backend run build",
+    "build:frontend": "npm --prefix apps/frontend run build",
+    "lint": "npm --prefix apps/backend run lint && npm --prefix apps/frontend run lint",
+    "test": "npm --prefix apps/backend run test",
+    "git:push": "node scripts/git-push.js",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "keywords": [
+    "saas",
+    "whatsapp",
+    "ai-employee",
+    "gemini",
+    "multi-tenant",
+    "gcp"
+  ],
+  "author": "Konnector AI Team",
+  "license": "UNLICENSED"
+}

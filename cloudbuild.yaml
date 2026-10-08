@@ -1,0 +1,75 @@
+# Google Cloud Build Production Pipeline for Konnector AI
+steps:
+  # 1. Build Backend Docker Image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/backend:$COMMIT_SHA'
+      - '-t'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/backend:latest'
+      - './apps/backend'
+
+  # 2. Build Frontend Docker Image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/frontend:$COMMIT_SHA'
+      - '-t'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/frontend:latest'
+      - './apps/frontend'
+
+  # 3. Push Backend Image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/backend:$COMMIT_SHA'
+
+  # 4. Push Frontend Image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/frontend:$COMMIT_SHA'
+
+  # 5. Deploy Backend to GCP Cloud Run with Secret Bindings
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'konnector-backend'
+      - '--image=$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/backend:$COMMIT_SHA'
+      - '--region=$_REGION'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=50'
+      - '--cpu=2'
+      - '--memory=2Gi'
+      - '--service-account=konnector-cloudrun-sa@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--set-secrets=DATABASE_URL=konnector-db-url:latest,JWT_SECRET=konnector-jwt-secret:latest,GOOGLE_GENAI_API_KEY=gemini-api-key:latest,WHATSAPP_CLOUD_API_ACCESS_TOKEN=whatsapp-cloud-api-token:latest'
+      - '--set-env-vars=NODE_ENV=production,PORT=4000'
+
+  # 6. Deploy Frontend to GCP Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'konnector-frontend'
+      - '--image=$_REGION-docker.pkg.dev/$PROJECT_ID/konnector-repo/frontend:$COMMIT_SHA'
+      - '--region=$_REGION'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=20'
+      - '--cpu=1'
+      - '--memory=1Gi'
+      - '--set-env-vars=NODE_ENV=production'
+
+substitutions:
+  _REGION: 'us-central1'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

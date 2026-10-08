@@ -1,0 +1,611 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  PARTNER_ADMIN
+  TENANT_OWNER
+  MANAGER
+  AGENT
+  VIEWER
+}
+
+enum PlanTier {
+  TRIAL
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  UNPAID
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum EmployeeTemplate {
+  ADMISSIONS_OFFICER
+  CUSTOMER_SUPPORT
+  SALES_DEVELOPMENT
+  APPOINTMENT_COORDINATOR
+  COLLECTIONS_OFFICER
+  HR_ASSISTANT
+  OPERATIONS_COORDINATOR
+  CUSTOM
+}
+
+enum ConversationStatus {
+  ACTIVE_AI
+  HUMAN_TAKEOVER
+  WAITING_FOR_USER
+  RESOLVED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  DOCUMENT
+  AUDIO
+  VIDEO
+  LOCATION
+  INTERACTIVE
+  TEMPLATE
+}
+
+enum DocStatus {
+  PENDING
+  PROCESSING
+  INDEXED
+  FAILED
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  APPOINTMENT_SCHEDULED
+  PROPOSAL_SENT
+  WON
+  LOST
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+// ============================================================================
+// MODULE 1: ORGANIZATION & TENANT MANAGEMENT
+// ============================================================================
+
+model Organization {
+  id               String       @id @default(uuid())
+  name             String
+  slug             String       @unique
+  customDomain     String?      @unique
+  logoUrl          String?
+  primaryColor     String?      @default("#0F52BA")
+  status           String       @default("ACTIVE") // ACTIVE, SUSPENDED, PENDING
+  timezone         String       @default("UTC")
+  currency         String       @default("USD")
+  gstNumber        String?
+  isWhiteLabel     Boolean      @default(false)
+  settings         Json?        @default("{}")
+
+  users            User[]
+  employees        AiEmployee[]
+  whatsappChannels WhatsAppChannel[]
+  conversations    Conversation[]
+  knowledgeBases   KnowledgeBase[]
+  leads            Lead[]
+  appointments     Appointment[]
+  sequences        FollowUpSequence[]
+  auditLogs        AuditLog[]
+  usageMeters      UsageMeter[]
+  subscription     Subscription?
+  invoices         Invoice[]
+  handoffTickets   HandoffTicket[]
+
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([slug])
+  @@index([customDomain])
+}
+
+model User {
+  id              String        @id @default(uuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email           String        @unique
+  passwordHash    String?
+  firebaseUid     String?       @unique
+  fullName        String
+  avatarUrl       String?
+  phone           String?
+  role            Role          @default(AGENT)
+  isActive        Boolean       @default(true)
+  lastLoginAt     DateTime?
+
+  assignedLeads         Lead[]          @relation("AssignedLeads")
+  assignedConversations Conversation[]  @relation("AssignedConversations")
+  assignedHandoffs      HandoffTicket[] @relation("AssignedHandoffs")
+  auditLogs             AuditLog[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action         String
+  entity         String
+  entityId       String?
+  details        Json?
+  ipAddress      String?
+  userAgent      String?
+  timestamp      DateTime     @default(now())
+
+  @@index([organizationId, timestamp])
+}
+
+model UsageMeter {
+  id                   String       @id @default(uuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  periodStart          DateTime
+  periodEnd            DateTime
+  conversationsCount   Int          @default(0)
+  messagesSent         Int          @default(0)
+  messagesReceived     Int          @default(0)
+  aiTokensUsed         Int          @default(0)
+  storageBytes         BigInt       @default(0)
+  leadsCaptured        Int          @default(0)
+  appointmentsBooked   Int          @default(0)
+
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@unique([organizationId, periodStart])
+}
+
+// ============================================================================
+// MODULE 2: AI EMPLOYEE ENGINE
+// ============================================================================
+
+model AiEmployee {
+  id                  String           @id @default(uuid())
+  organizationId      String
+  organization        Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                String
+  avatarUrl           String?
+  role                String           // e.g. Admissions Officer, Support Executive
+  department          String           // e.g. Admissions, Sales, Support
+  templateType        EmployeeTemplate @default(CUSTOM)
+  instructions        String           @db.Text
+  personalityPrompt   String           @db.Text
+  systemPromptOverride String?         @db.Text
+  voiceTone           String           @default("Professional, Warm, Empathetic")
+  confidenceThreshold Float            @default(0.70)
+  languages           String[]         @default(["en"])
+  businessHours       Json?            // { "monday": {"start": "09:00", "end": "18:00"}, ... }
+  outOfHoursMessage   String?          @db.Text
+  isDefault           Boolean          @default(false)
+  isActive            Boolean          @default(true)
+
+  conversations       Conversation[]
+  leads               Lead[]
+  escalationRules     EscalationRule[]
+  knowledgeBases      KnowledgeBase[]
+  appointments        Appointment[]
+
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@index([organizationId])
+}
+
+model EscalationRule {
+  id             String     @id @default(uuid())
+  employeeId     String
+  employee       AiEmployee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  conditionType  String     // LOW_CONFIDENCE, KEYWORD_MATCH, SENTIMENT_NEGATIVE, USER_REQUEST
+  thresholdValue String?    // e.g. "0.65" or "complaint,speak to human,cancel"
+  targetRole     Role       @default(AGENT)
+  targetUserId   String?
+  action         String     @default("TRANSFER_TO_AGENT")
+  isActive       Boolean    @default(true)
+}
+
+// ============================================================================
+// MODULE 3: WHATSAPP INTEGRATION & OMNICHANNEL CONVERSATIONS
+// ============================================================================
+
+model WhatsAppChannel {
+  id                   String         @id @default(uuid())
+  organizationId       String
+  organization         Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  phoneNumberId        String         @unique
+  wabaId               String         // WhatsApp Business Account ID
+  displayPhoneNumber   String
+  verifiedName         String?
+  qualityRating        String?        @default("GREEN")
+  accessTokenEncrypted String         @db.Text
+  webhookVerifyToken   String
+  isActive             Boolean        @default(true)
+
+  conversations        Conversation[]
+  messages             WhatsAppMessage[]
+
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([organizationId])
+}
+
+model Conversation {
+  id                 String             @id @default(uuid())
+  organizationId     String
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channelId          String
+  channel            WhatsAppChannel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  employeeId         String?
+  employee           AiEmployee?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  contactPhoneNumber String
+  contactName        String?
+  status             ConversationStatus @default(ACTIVE_AI)
+  assignedAgentId    String?
+  assignedAgent      User?              @relation("AssignedConversations", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  aiMemory           Json?              @default("{}")
+  summary            String?            @db.Text
+  sentimentScore     Float?             @default(0.0)
+  lastMessageAt      DateTime           @default(now())
+
+  messages           WhatsAppMessage[]
+  lead               Lead?
+  handoffTickets     HandoffTicket[]
+
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@unique([channelId, contactPhoneNumber])
+  @@index([organizationId, status])
+  @@index([contactPhoneNumber])
+}
+
+model WhatsAppMessage {
+  id               String           @id @default(uuid())
+  organizationId   String
+  channelId        String
+  channel          WhatsAppChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversationId   String
+  conversation     Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  waMessageId      String?          @unique
+  direction        MessageDirection
+  senderNumber     String
+  recipientNumber  String
+  messageType      MessageType      @default(TEXT)
+  content          String?          @db.Text
+  mediaUrl         String?
+  mediaMimeType    String?
+  aiProcessed      Boolean          @default(false)
+  aiConfidence     Float?
+  sentiment        String?          // POSITIVE, NEUTRAL, NEGATIVE
+  suggestedReply   String?          @db.Text
+  metadata         Json?
+  timestamp        DateTime         @default(now())
+
+  @@index([conversationId, timestamp])
+  @@index([organizationId])
+}
+
+// ============================================================================
+// MODULE 4: KNOWLEDGE BASE & RAG ENGINE
+// ============================================================================
+
+model KnowledgeBase {
+  id             String              @id @default(uuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId     String?
+  employee       AiEmployee?         @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  name           String
+  description    String?
+
+  documents      KnowledgeDocument[]
+  chunks         DocumentChunk[]
+  faqs           FaqItem[]
+
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([organizationId])
+}
+
+model KnowledgeDocument {
+  id              String          @id @default(uuid())
+  organizationId  String
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase   @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  title           String
+  docType         String          // PDF, DOCX, TXT, CSV, URL, FAQ
+  fileUrl         String?
+  sourceUrl       String?
+  status          DocStatus       @default(PENDING)
+  chunksCount     Int             @default(0)
+  tokenCount      Int             @default(0)
+  errorMessage    String?
+  metadata        Json?
+
+  chunks          DocumentChunk[]
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([knowledgeBaseId])
+}
+
+model DocumentChunk {
+  id              String            @id @default(uuid())
+  organizationId  String
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase     @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  documentId      String
+  document        KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunkIndex      Int
+  content         String            @db.Text
+  tokenCount      Int
+  embedding       Float[]           // Stored vector values
+  metadata        Json?
+
+  createdAt       DateTime          @default(now())
+
+  @@index([knowledgeBaseId])
+  @@index([documentId])
+}
+
+model FaqItem {
+  id              String        @id @default(uuid())
+  organizationId  String
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  question        String        @db.Text
+  answer          String        @db.Text
+  category        String?       @default("General")
+  isActive        Boolean       @default(true)
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([knowledgeBaseId])
+}
+
+// ============================================================================
+// MODULE 5: LEAD MANAGEMENT (CRM)
+// ============================================================================
+
+model Lead {
+  id                 String             @id @default(uuid())
+  organizationId     String
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversationId     String?            @unique
+  conversation       Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  employeeId         String?
+  employee           AiEmployee?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  fullName           String?
+  phoneNumber        String
+  email              String?
+  stage              LeadStage          @default(NEW)
+  score              Int                @default(50) // 0-100 Lead scoring
+  source             String             @default("WHATSAPP")
+  intentSummary      String?            @db.Text
+  customFields       Json?              @default("{}") // Dynamic Industry Fields (e.g. Grade for School, Budget for Real Estate)
+  tags               String[]           @default([])
+  priority           String             @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  assignedToUserId   String?
+  assignedToUser     User?              @relation("AssignedLeads", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  activities         LeadActivity[]
+  appointments       Appointment[]
+  sequenceExecutions SequenceExecution[]
+
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([organizationId, stage])
+  @@index([phoneNumber])
+}
+
+model LeadActivity {
+  id             String       @id @default(uuid())
+  organizationId String
+  leadId         String
+  lead           Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  activityType   String       // MESSAGE_RECEIVED, MESSAGE_SENT, STAGE_CHANGED, NOTE_ADDED, APPOINTMENT_BOOKED
+  description    String       @db.Text
+  performedBy    String       @default("AI_EMPLOYEE") // AI_EMPLOYEE, AGENT, SYSTEM
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([leadId, createdAt])
+}
+
+// ============================================================================
+// MODULE 6: APPOINTMENT BOOKING
+// ============================================================================
+
+model Appointment {
+  id               String            @id @default(uuid())
+  organizationId   String
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leadId           String?
+  lead             Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  employeeId       String?
+  employee         AiEmployee?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  title            String
+  startTime        DateTime
+  endTime          DateTime
+  status           AppointmentStatus @default(SCHEDULED)
+  attendeeName     String
+  attendeePhone    String
+  attendeeEmail    String?
+  notes            String?           @db.Text
+  meetingLink      String?
+  calendarProvider String            @default("INTERNAL") // GOOGLE_CALENDAR, OUTLOOK, CALENDLY, INTERNAL
+  externalEventId  String?
+
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([organizationId, startTime])
+}
+
+// ============================================================================
+// MODULE 7: AUTOMATED FOLLOW-UP ENGINE
+// ============================================================================
+
+model FollowUpSequence {
+  id             String              @id @default(uuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  triggerEvent   String              // LEAD_CREATED, STAGE_CHANGED, NO_REPLY, APPOINTMENT_MISSED
+  isActive       Boolean             @default(true)
+  stopOnReply    Boolean             @default(true)
+  stopOnBooking  Boolean             @default(true)
+
+  steps          SequenceStep[]
+  executions     SequenceExecution[]
+
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([organizationId])
+}
+
+model SequenceStep {
+  id              String           @id @default(uuid())
+  sequenceId      String
+  sequence        FollowUpSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  stepOrder       Int
+  delayHours      Int              // e.g. 24 (Day 1), 72 (Day 3), 168 (Day 7)
+  messageTemplate String           @db.Text
+  mediaUrl        String?
+
+  @@unique([sequenceId, stepOrder])
+}
+
+model SequenceExecution {
+  id               String           @id @default(uuid())
+  sequenceId       String
+  sequence         FollowUpSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  leadId           String
+  lead             Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  currentStepOrder Int              @default(1)
+  status           String           @default("RUNNING") // RUNNING, PAUSED, COMPLETED, CANCELLED
+  nextRunAt        DateTime
+  lastExecutedAt   DateTime?
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([status, nextRunAt])
+}
+
+// ============================================================================
+// MODULE 8: HUMAN HANDOFF & LIVE CHAT ESCALATION
+// ============================================================================
+
+model HandoffTicket {
+  id              String       @id @default(uuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggerReason   String       // LOW_CONFIDENCE, CUSTOMER_REQUESTED, COMPLAINT, POLICY_VIOLATION
+  aiConfidence    Float?
+  status          String       @default("PENDING") // PENDING, ASSIGNED, RESOLVED
+  assignedAgentId String?
+  assignedAgent   User?        @relation("AssignedHandoffs", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  agentNotes      String?      @db.Text
+  summary         String?      @db.Text
+  escalatedAt     DateTime     @default(now())
+  resolvedAt      DateTime?
+
+  @@index([organizationId, status])
+}
+
+// ============================================================================
+// MODULE 10: BILLING & SUBSCRIPTIONS
+// ============================================================================
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  organizationId       String             @unique
+  organization         Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                 PlanTier           @default(TRIAL)
+  billingCycle         BillingCycle       @default(MONTHLY)
+  status               SubscriptionStatus @default(TRIALING)
+  currentPeriodStart   DateTime           @default(now())
+  currentPeriodEnd     DateTime
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  razorpayCustomerId   String?
+  razorpaySubId        String?
+  cancelAtPeriodEnd    Boolean            @default(false)
+
+  invoices             Invoice[]
+
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model Invoice {
+  id             String        @id @default(uuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  invoiceNumber  String        @unique
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("USD")
+  status         String        @default("PAID") // PAID, OPEN, VOID
+  paymentGateway String        @default("STRIPE") // STRIPE, RAZORPAY
+  transactionId  String?
+  gstAmount      Decimal?      @default(0) @db.Decimal(10, 2)
+  pdfUrl         String?
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+}

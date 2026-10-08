@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Cloud SQL Emulation with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: konnector-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: konnector_ai
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d konnector_ai']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis Memorystore Emulation
+  redis:
+    image: redis:7-alpine
+    container_name: konnector-redis
+    restart: always
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # NestJS Backend API Service
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: konnector-backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '4000:4000'
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgrespassword@postgres:5432/konnector_ai?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: konnector_super_secret_jwt_key_2026_production
+      GOOGLE_GENAI_API_KEY: AIzaSyFakeGemini25FlashKeyForLocalDev
+      WHATSAPP_CLOUD_API_ACCESS_TOKEN: EAAG_fake_meta_token_for_local_dev
+      WHATSAPP_PHONE_NUMBER_ID: 108492039485721
+      WHATSAPP_BUSINESS_ACCOUNT_ID: WABA_EDU_9921
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: konnector_secure_verify_token_2026
+
+  # Next.js 15 Frontend SaaS Application
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    container_name: konnector-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://backend:4000/api/v1
+
+volumes:
+  pgdata:
+  redisdata:

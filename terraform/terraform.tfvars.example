@@ -1,0 +1,6 @@
+project_id     = "konnector-ai-prod"
+region         = "us-central1"
+db_password    = "your_strong_postgres_password"
+gemini_api_key = "your_actual_google_gemini_key_here"
+whatsapp_token = "your_actual_meta_system_user_token"
+domain_name    = "konnector.ai"
